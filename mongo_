@@ -1,0 +1,135 @@
+#!/usr/bin/env python
+
+import sys
+import os
+import re
+import urllib2
+
+try:
+  import json
+except ImportError:
+  import simplejson as json
+
+class Plugin:
+  def doAutoConfig(self):
+    print 'yes'
+  def doConfig(self):
+    pass
+  def doData(self):
+    pass
+
+class MongoPlugin(Plugin):
+  name = 'mongo'
+  def __init__(self, host, port):
+    self.host = host
+    self.port = port
+  def _getServerStatus(self):
+    raw = urllib2.urlopen( "http://%s:%d/_status" % (self.host, self.port) ).read()
+    return json.loads( raw )["serverStatus"]
+
+class mongo_btree(MongoPlugin):
+  name = 'btree'
+  def _get(self):
+    return self._getServerStatus()["indexCounters"]["btree"]
+  def doConfig(self):
+    print "graph_title MongoDB btree stats"
+    print "graph_args --base 1000 -l 0"
+    print "graph_vlabel mb ${graph_period}"
+    print "graph_category MongoDB"
+    for k in self._get():
+        print k + ".label " + k
+        print k + ".min 0"
+        print k + ".type COUNTER"
+        print k + ".max 500000"
+        print k + ".draw LINE1"
+  def doData(self):
+    for k,v in self._get().iteritems():
+      print( str(k) + ".value " + str(int(v)) )
+
+class mongo_conn(MongoPlugin):
+  name = 'connections'
+  def doConfig(self):
+    print "graph_title MongoDB current connections"
+    print "graph_args --base 1000 -l 0"
+    print "graph_vlabel connections"
+    print "graph_category MongoDB"
+    print self.name + ".label " + self.name
+  def doData(self):
+    print self.name + ".value " + str( self._getServerStatus()["connections"]["current"] )
+
+class mongo_lock(MongoPlugin):
+  name = 'locked'
+  def doData(self):
+    print self.name + ".value " + str( 100 * self._getServerStatus()["globalLock"]["ratio"] )
+  def doConfig(self):
+    print "graph_title MongoDB write lock percentage"
+    print "graph_args --base 1000 -l 0 "
+    print "graph_vlabel percentage"
+    print "graph_category MongoDB"
+    print self.name + ".label " + self.name
+
+class mongo_mem(MongoPlugin):
+  def _ok(self, s):
+    return s == "resident" or s == "virtual" or s == "mapped"
+  def doData(self):
+    for k,v in self._getServerStatus()["mem"].iteritems():
+      if self._ok(k):
+        print( str(k) + ".value " + str(v * 1024 * 1024) )
+  def doConfig(self):
+    print "graph_title MongoDB memory usage"
+    print "graph_args --base 1024 -l 0 --vertical-label Bytes"
+    print "graph_category MongoDB"
+    for k in self._getServerStatus()["mem"]:
+      if self._ok( k ):
+        print k + ".label " + k
+        print k + ".draw LINE1"
+
+class mongo_ops(MongoPlugin):
+  def doData(self):
+    ss = self._getServerStatus()
+    for k,v in ss["opcounters"].iteritems():
+      print( str(k) + ".value " + str(v) )
+  def doConfig(self):
+    print "graph_title MongoDB ops"
+    print "graph_args --base 1000 -l 0"
+    print "graph_vlabel ops / ${graph_period}"
+    print "graph_category MongoDB"
+    print "graph_total total"
+    for k in self._getServerStatus()["opcounters"]:
+      print k + ".label " + k
+      print k + ".min 0"
+      print k + ".type COUNTER"
+      print k + ".max 500000"
+      print k + ".draw LINE1"
+
+plugin_name = os.path.basename(sys.argv[0])
+
+# TODO: find values of host and port from the plugin name
+host = os.environ.get("host", "127.0.0.1")
+port = int(os.environ.get("port", "28017"))
+
+if plugin_name == 'mongo_btree':
+  plugin = mongo_btree(host, port)
+elif plugin_name == 'mongo_conn':
+  plugin = mongo_conn(host, port)
+elif plugin_name == 'mongo_lock':
+  plugin = mongo_lock(host, port)
+elif plugin_name == 'mongo_mem':
+  plugin = mongo_mem(host, port)
+elif plugin_name == 'mongo_ops':
+  plugin = mongo_ops(host, port)
+else:
+  print "undefined name: %s" % (plugin_name)
+  sys.exit(1)
+
+if len(sys.argv) > 1:
+  if sys.argv[1] == 'autoconfig':
+    plugin.doAutoConfig()
+    sys.exit(0)
+  elif sys.argv[1] == 'config':
+    plugin.doConfig()
+    sys.exit(0)
+
+plugin.doData()
+
+# vim:set ft=python :
